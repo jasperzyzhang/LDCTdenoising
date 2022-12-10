@@ -1,0 +1,284 @@
+---
+title: "CHL5227A3"
+author: "Sophie Ma"
+date: "11/3/2020"
+output: pdf_document
+---
+
+```{r loadpkgs, echo=F, message=F, warning=F}
+library(lme4)
+library(geepack)
+library(parallel)
+library(tidyverse)
+library(tableone)
+library(ggplot2)
+```
+
+```{r readdata, echo=F}
+setwd('/Users/sophiema/Desktop/Fall2020/CHL5227 Clinical Trial/A3')
+load('rmarkdownEnviroment.RData')
+```
+
+
+##Q2
+```{r message=F, eval=F}
+### prep
+n <- 50 #number of patients
+m <- 1000 #number of simulations
+effect <- 3 #theta: important clinical diff
+  ## create empty matrixes to use
+pointest <- matrix(NA, m, 3) 
+varest <- matrix(NA, m, 3) 
+coverage <- matrix(NA, m, 3) 
+power <- matrix(NA, m, 3)
+## loop
+for (j in 1:m) { 
+  set.seed(j)
+  ## Generate dataset
+  a <- rep(rnorm(n,mean=97,sd=sqrt(12)),each=4) 
+  z <- rep(rbinom(n, size=1, prob=0.5), each=4)
+  eps<- rnorm(4*n, 0, sd = sqrt(3))
+  y <- a + effect*z*rep(c(0, 1, 1, 1),n) + eps
+  # combine the data together
+  df <- data.frame(
+    `id` = rep(1:n, each=4),        #i
+    `measurement` = rep(1:4, n)     #j
+     )
+  df <- cbind(df, a, z, y)
+
+  #follow-up data
+  df.fl <- df %>% filter(measurement %in% c(2, 3, 4))
+
+  ## naive model
+  model.naive <- lm(y~z, data=df.fl) 
+  pointest[j,1] <- coef(model.naive)[2]
+  varest[j,1] <- vcov(model.naive)[2,2]
+  cil <- pointest[j,1] + qnorm(0.025) * sqrt(varest[j,1]) 
+  ciu <- pointest[j,1] + qnorm(0.975) * sqrt(varest[j,1]) 
+  coverage[j,1] <- (effect >= cil) & (effect <= ciu) 
+  power[j,1] <- (cil > 0.0) | (ciu < 0.0)
+  
+  ## GEE
+  model.gee<- geeglm(y~z, id=id, data=df.fl, corstr ="independence") 
+  pointest[j,2] <- coef(model.gee)[2]
+  varest[j,2] <- coef(summary(model.gee))[2,2]^2
+  cil <- pointest[j,2] + qnorm(0.025) * sqrt(varest[j,2]) 
+  ciu <- pointest[j,2] + qnorm(0.975) * sqrt(varest[j,2]) 
+  coverage[j,2] <- (effect >= cil) & (effect <= ciu) 
+  power[j,2] <- (cil > 0.0) | (ciu < 0.0)
+  
+  ## Random intercept model
+  model.mixed<-lmer(y~z+(1|id),data=df.fl)
+  pointest[j,3] <- coef(summary(model.mixed))[2] 
+  varest[j,3]<-vcov(model.mixed)[2,2]
+  cil <- pointest[j,3] + qnorm(0.025) * sqrt(varest[j,3]) 
+  ciu <- pointest[j,3] + qnorm(0.975) * sqrt(varest[j,3]) 
+  coverage[j,3] <- (effect >= cil) & (effect <= ciu) 
+  power[j,3] <- (cil > 0.0) | (ciu < 0.0)
+}
+### display results
+results<-cbind(colMeans(pointest), colMeans(pointest) - effect, apply(pointest, 2, sd), 
+               sqrt(colMeans(varest)), sqrt(apply(pointest, 2, var) + (colMeans(pointest) - effect)^2), 
+               sqrt(colMeans(varest)/m), colMeans(coverage), colMeans(power))
+rownames(results) <- c('Naive', 'GEE', 'Mixed')
+colnames(results) <- c('Mean', 'Bias', 'SD', 'Mean SE', 'RMSE', 'MCE', 'Coverage', 'Power')
+
+```
+
+
+
+##Q3
+```{r, eval=F}
+### prep
+n <- 50 #number of patients
+m <- 1000 #number of simulations
+effect <- 3 #theta: important clinical diff
+  ## create empty matrixes to use
+pointest <- matrix(NA, m, 3) 
+varest <- matrix(NA, m, 3) 
+coverage <- matrix(NA, m, 3) 
+power <- matrix(NA, m, 3)
+## loop
+for (j in 1:m) { 
+  set.seed(j)
+## Generate dataset
+  a <- rep(rnorm(n,mean=97,sd=sqrt(12)),each=4) 
+  z <- rep(rbinom(n, size=1, prob=0.5), each=4)
+  eps<- rnorm(4*n, 0, sd = sqrt(3))
+  y <- a + effect*z*rep(c(0, 1, 1, 1),n) + eps
+  #combine the data together
+  df <- data.frame(id=(1:n)[rep(1:n,times=rep(4,n))])
+  df$measurement<-rep(1:4, n)
+  df <- cbind(df, a, z, y)
+
+  #follow-up data
+  df.fl <- df %>% filter(measurement %in% c(2, 3, 4))
+  #basline data
+  df.base <- df %>% filter(measurement==1)
+  
+  #adjust the baseline measurement
+  #make baseline measurement a covariate for follow-up measurements 2,3,4
+  base.y <- rep(df.base$y, each=3)
+  df.fl.adj <- mutate(df.fl, base.y)
+  
+  ## naive model
+  model.naive <- lm(y~z + base.y, data=df.fl.adj) 
+  pointest[j,1] <- coef(model.naive)[2]
+  varest[j,1] <- vcov(model.naive)[2,2]
+  cil <- pointest[j,1] + qnorm(0.025) * sqrt(varest[j,1]) 
+  ciu <- pointest[j,1] + qnorm(0.975) * sqrt(varest[j,1]) 
+  coverage[j,1] <- (effect >= cil) & (effect <= ciu) 
+  power[j,1] <- (cil > 0.0) | (ciu < 0.0)
+  
+  ## GEE
+  model.gee<- geeglm(y~z + base.y, id=id, data=df.fl.adj, corstr ="independence") 
+  pointest[j,2] <- coef(model.gee)[2]
+  varest[j,2] <- coef(summary(model.gee))[2,2]^2
+  cil <- pointest[j,2] + qnorm(0.025) * sqrt(varest[j,2]) 
+  ciu <- pointest[j,2] + qnorm(0.975) * sqrt(varest[j,2]) 
+  coverage[j,2] <- (effect >= cil) & (effect <= ciu) 
+  power[j,2] <- (cil > 0.0) | (ciu < 0.0)
+  
+  ## Random intercept model
+  model.mixed<-lmer(y~z+ base.y + (1|id),data=df.fl.adj)
+  pointest[j,3] <- coef(summary(model.mixed))[2] 
+  varest[j,3]<-vcov(model.mixed)[2,2]
+  cil <- pointest[j,3] + qnorm(0.025) * sqrt(varest[j,3]) 
+  ciu <- pointest[j,3] + qnorm(0.975) * sqrt(varest[j,3]) 
+  coverage[j,3] <- (effect >= cil) & (effect <= ciu) 
+  power[j,3] <- (cil > 0.0) | (ciu < 0.0)
+}
+### display results
+results2<-cbind(colMeans(pointest), colMeans(pointest) - effect, apply(pointest, 2, sd), 
+                sqrt(colMeans(varest)), sqrt(apply(pointest, 2, var) + (colMeans(pointest) - effect)^2), 
+                sqrt(colMeans(varest)/m), colMeans(coverage), colMeans(power))
+rownames(results2) <- c('Naive', 'GEE', 'Mixed')
+colnames(results2) <- c('Mean', 'Bias', 'SD', 'Mean SE', 'RMSE', 'MCE', 'Coverage', 'Power')
+
+```
+
+##Table1: Comparision between naive, GEE, and random intercept mixed model
+```{r}
+kableone(round(results, 4))
+```
+
+Table 1 Comments:
+
+- We simulated 1000 times, each time we fitted three models, which are Naive, GEE, and random intercept mixed model, and calculated estimated effect size $\hat{\beta}$, variance of the estimated effect size $var(\hat{\beta})$, wether the 95% CI captures the true effect size, and wether we can reject the null hypothesis where effect size=0 based on the lower bound and the upper bound of the 95% CI. 
+
+- After the simulation, we the calculated:
+    - Mean: mean of 1000 $\hat{\beta}$, the true value is 3. It is same across the three models.
+    
+    - Bias: mean of 1000 $\hat{\beta}$ - the true value. It is same across the three models.
+    
+    - SD: standard deviation of the 1000 $\hat{\beta}$. It is same across the three models.
+    
+    - Mean SE: mean of the standard error of the estimated effect size $E[se(\hat{\beta})]$. It is different across the tree models: naive model is smaller than GEE and mixed model. It measures in average how precisely the model estimates the effect size. Since the latter two models took considerations on correlation in data, their mean SE were larger than the naive model.
+    
+    - rmse: a measure of both variation and bias (rmse = $\sqrt{variance + Bias^2}$)
+    
+    - Coverage: the proportion of 1000 simulations of which the 95% CI captures 3. Among the three models, GEE model and mixed effect model had good coverages, just below 95%. The Naive model had a bad coverage of 0.76, meaning there were only 761 simulations that successfully captured 3.
+    
+    - Power: the proportion of rejecting $\beta=0$ under the null hypothesis in 1000 simulations. Naive model had the lasrgest power among three models. This is the narrow 95% CI: the lower bound of the naive model is usually greater than 0, and the upper bound is sometimes smaller than 3 with its relatively small variation measured by mean se, which explains why the naive model had a high power but a low coverage of the effect size.
+    
+- Efficiency is measured by mean SE, the lower the mean SE the better the efficiency. From the table, it is showned that the naive model had the smallest mean se of 0.633 among the three models. However, with the low converage and some variation between the SD and the mean SE (1.056 and 0.633), the naive model underestimated its mean SE. Therefore, the GEE and the mixed model had better efficiency.
+    
+- Validity is measured by 95% CI coverage probability. From the above coverage bullet point, we conclude that GEE model and random intercept mixed effect model are valid and outperform the naive model.
+
+- Comparison between SD and mean SE: The mean SE of all three models are smaller than the standard deviation of the 1000 $\hat{\beta}$'s, GEE and mixed models are close to it, where naive model is not.
+
+
+##Table 2: Comparision between naive, GEE, and random intercept mixed model with adjustment of baseline measurements
+```{r}
+kableone(round(results2, 4))
+
+```
+
+Tabel 2 comments:
+
+- With the baseline IQ measurements variable included in the models, we can see the decreases of SD, Mean SE, rMSE, MCE, and increases in coverage and power.
+
+- In general, the three models outperformed the ones without the adjustment of baseline mearements.
+
+
+    
+
+##Q4
+```{r, eval=F}
+## prep
+n <- 50 #number of patients
+m <- 1000 #number of simulations
+effect <- 3 #theta: important clinical diff
+
+pointest <- matrix(NA, m, 1) 
+varest <- matrix(NA, m, 1) 
+coverage <- matrix(NA, m, 1) 
+power <- matrix(NA, m, 1)
+
+#create a function to calculate power, with argument sample size
+powersim<-function(n){
+  for (j in 1:m) { 
+    set.seed(j)
+    a <- rep(rnorm(n,mean=97,sd=sqrt(12)),each=4) # treatment type for each individual
+    z <- rep(rbinom(n, size=1, prob=0.5), each=4) # Data generating mechanism
+    y <- a + effect*z*rep(c(0, 1, 1, 1),n) + rnorm(4*n, 0, sd = sqrt(3))
+    # combine the data together
+    df <- data.frame(
+          `id` = rep(1:n, each=4),        #i
+           `measurement` = rep(1:4, n)     #j
+            )
+    df <- cbind(df, a, z, y)
+
+    #follow-up data
+    df.fl <- df %>% filter(measurement %in% c(2, 3, 4))
+
+    #naive
+    model.naive <- lm(y~z, data=df.fl) 
+    pointest[j,1] <- coef(model.naive)[2]
+    varest[j,1] <- vcov(model.naive)[2,2]
+    cil <- pointest[j,1] + qnorm(0.025) * sqrt(varest[j,1]) 
+    ciu <- pointest[j,1] + qnorm(0.975) * sqrt(varest[j,1]) 
+    coverage[j,1] <- (effect >= cil) & (effect <= ciu) 
+    power[j,1] <- (cil > 0.0) | (ciu < 0.0)
+  }
+return(colMeans(power))
+}
+
+#Power Simulation
+n.size<-seq(30, 101, by=3)
+pow<-c()
+
+for (i in 1:length(n.size)){
+  pow[i] <-powersim(n.size[i])
+}
+
+power.plot<-data.frame(n.size,pow)
+```
+
+
+```{r}
+ggplot(power.plot, aes(x=n.size, y=pow)) +
+  geom_point()+
+  geom_line()+
+  geom_vline(xintercept = 39) +
+  labs(x="Sample Size", y="Power") +
+  ggtitle("Power Curve: Sample Size and its Corresponding Power")
+
+(power0.9<-powersim(39))
+```
+The required minimum sample size needed for 90% power is 39, corresponds to 90.8% power.
+
+##Q5: Improvement of the models
+```{r}
+ggplot(df, aes(x=z, y=y)) +
+  geom_line(size=1.2, aes(group=measurement, color=measurement)) +
+  geom_point(size=1.6, aes(color=measurement), shape=15)
+
+```
+
+- The data generating mechanism is not a very realistic model for characterizing the IQ measurements over time, mainly because it is not able to identify the effect of mearement on the relationship between treatment and children cognitive decline. From the figure above, In the interaction plot, the lines for measurement 3 and measurement 4 are parallel, indicating that treatment has the same effect in both groups, so there is no interaction. The line for measurement=1 is flat, indicating that, among these children, there is no difference in IQ score between the intervention arm and the control arm.
+
+- We can improve the model by including a interaction term of treatment and measurement to all the three models.
+
+
+
