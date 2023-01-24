@@ -1,3 +1,4 @@
+#add poisson noise or gaussian noise
 import numpy as np
 import skimage.io as io
 from skimage.util import random_noise
